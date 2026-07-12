@@ -40,6 +40,9 @@ All features are under the `/larp` command:
 - `/larp official` — See your real owned badges
 - `/larp milestones` — Nitro/Boost badge ladder
 - `/larp real [user-id]` — Debug real badge URLs
+- `/larp text <find> <replace>` - Replace any exact UI text including join date
+- `/larp untext <find>` - Remove replacement
+- `/larp texts` - List active replacements
 
 **Username override, fake account decoy, etc.** are configured in **Settings → Plugins → Larp**
 
@@ -55,7 +58,18 @@ This is a client-side modification. Use at your own risk. Only affects what **yo
 
 ---
 
-**Original author credit in code:** Larp (with improvements by vibcode & ragebotted)
+made by Ooo & kt
+
+## Installation (Equicord)
+### Recommended: As Userplugin
+
+**Requirements:**
+- [Node.js](https://nodejs.org)
+- [Git](https://git-scm.com/download/win)
+
+**After installing both, restart your PC.**
+
+Open Command Prompt and run this entire block:
 
 ```bash
 cd %USERPROFILE%\Documents
