@@ -40,7 +40,7 @@
 - `/larp real [user-id]` → Get real badge URLs
 
 ### Text Replacement (Change dates, Member Since, etc.)
-- `/larp text <find> <replace>` → Replace any exact UI text
+- `/larp text <find> <replace>` → Replace any exact UI text including join date
 - `/larp untext <find>` → Remove replacement
 - `/larp texts` → List active replacements
 
