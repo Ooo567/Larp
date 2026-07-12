@@ -1,55 +1,61 @@
 # Larp - Equicord/Vencord Userplugin
+
 **Client-side only:** Changes what **you** see, not what others see.
 
 ## Features
-- Locally override your own `@username`
-- Add/remove real-looking Discord badges (curated catalog)
+- Locally override your own `@username` (display name untouched)
+- Add/remove real Discord badges from a curated catalog (visible only to you)
 - Hide official Discord badges you actually own
-- Add a decoy account in your account switcher
-- Change badge earned dates and other UI text
+- Drop a decoy entry into your account switcher popout
 
 ## Made by
 - **@vibcode** (Discord: 1497451226806353980)
 - **@ragebotted** (Discord: 893913378093944873)
 
-All /larp Commands
+---
 
-/larp help → Full list
-/larp catalog → Browse badges
-/larp add <id|all> → Add badge(s)
-/larp remove <id|all> → Remove badge(s)
-/larp list → Show your added badges
-/larp hide <id> / /larp unhide <id> → Hide real badges
-/larp official → See your actual owned badges
-/larp milestones → Nitro/Boost ladder
-/larp real [user-id] → Get real badge URLs
+## Installation (Equicord)
 
-Text Replacement (Change dates, Member Since, etc.)
+### Option 1: As Userplugin (Recommended)
 
-/larp text <find> <replace> → Replace any exact UI text including join date
-/larp untext <find> → Remove replacement
-/larp texts → List active replacements
+1. Build Equicord yourself (follow their guide)
+2. Place `index.tsx` into your `src/userplugins` folder
+3. Restart Equicord / rebuild
+4. Enable the **Larp** plugin in Settings → Plugins
+5. Use `/larp help` in any channel for commands
 
-Username override + fake account + fake earned date settings are in Settings → Plugins → Larp
+### Option 2: Via Plugin Manager (if supported)
+- Some forks allow loading `.tsx` userplugins directly.
 
-Releases
-Download latest index.tsx from the Releases page.
-Disclaimer
-Client-side only. Visible only to you. Use at your own risk.
+## Usage
 
-Made with ❤️ by Ooo & kt
+All features are under the `/larp` command:
+
+- `/larp help` — Full command list
+- `/larp catalog` — Browse available badges
+- `/larp add <id|all>` — Add badge(s)
+- `/larp remove <id|all>` — Remove badge(s)
+- `/larp list` — Your current badges
+- `/larp hide <id>` / `/larp unhide <id>` — Hide official badges
+- `/larp official` — See your real owned badges
+- `/larp milestones` — Nitro/Boost badge ladder
+- `/larp real [user-id]` — Debug real badge URLs
+
+**Username override, fake account decoy, etc.** are configured in **Settings → Plugins → Larp**
+
+## Releases
+
+Download the latest version from the [Releases page](https://github.com/Ooo567/larp-plugin/releases).
+
+## Contributing
+Feel free to open issues or PRs!
+
+## Disclaimer
+This is a client-side modification. Use at your own risk. Only affects what **you** see.
 
 ---
-## Installation (Equicord)
-### Recommended: As Userplugin
 
-**Requirements:**
-- [Node.js](https://nodejs.org)
-- [Git](https://git-scm.com/download/win)
-
-**After installing both, restart your PC.**
-
-Then open Command Prompt and run:
+**Original author credit in code:** Larp (with improvements by vibcode & ragebotted)
 
 ```bash
 cd %USERPROFILE%\Documents
@@ -59,7 +65,6 @@ cd Equicord
 pnpm install --no-frozen-lockfile
 pnpm build --dev
 pnpm inject
-
 cd src
 mkdir userplugins
 cd userplugins
