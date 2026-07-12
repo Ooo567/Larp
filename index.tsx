@@ -3,7 +3,7 @@ import { ApplicationCommandInputType, ApplicationCommandOptionType, sendBotMessa
 import { definePluginSettings } from "@api/Settings";
 import { ModalCloseButton, ModalContent, ModalRoot, ModalSize, openModal } from "@utils/modal";
 import definePlugin, { OptionType } from "@utils/types";
-import { FluxDispatcher, RestAPI, Text, UserStore } from "@webpack/common";
+import { FluxDispatcher, React, RestAPI, Text, UserStore } from "@webpack/common";
 
 const Larp_AUTHOR = { name: "Larp", id: 0n };
 
@@ -529,6 +529,13 @@ function stripHiddenBadgesFromProfilePayload(body: any) {
     const hidden = loadHiddenOfficialBadges();
     if (!hidden.length) return;
 
+    if (hidden.includes("all-badges")) {
+        for (const container of [body, body.user_profile]) {
+            if (Array.isArray(container?.badges)) container.badges = [];
+        }
+        return;
+    }
+
     const hiddenRealIds = new Set<string>();
     const hiddenPrefixes: string[] = [];
     for (const h of hidden) {
@@ -582,34 +589,104 @@ const NITRO_FAMILY_IMAGES = BADGE_CATALOG.filter(b => b.tierGroup === "nitro-sub
 const BOOST_FAMILY_IMAGES = BADGE_CATALOG.filter(b => b.tierGroup === "server-boost").map(b => b.image);
 const GIFTING_FAMILY_IMAGES = BADGE_CATALOG.filter(b => b.tierGroup === "gifting").map(b => b.image);
 
-function hiddenBadgeImageUrls(): Set<string> {
+const NITRO_LABEL_PATTERN = /^(discord nitro|subscriber since\b)/i;
+const HIDDEN_LABEL_PATTERNS: Record<string, RegExp> = {
+    "discord-staff": /^discord staff$/i,
+    "discord-nitro": NITRO_LABEL_PATTERN,
+    "moderator-programs-alumni": /^moderator programs alumni$/i,
+    "hypesquad-events": /^hypesquad events$/i,
+    "hypesquad-bravery": /^hypesquad bravery$/i,
+    "hypesquad-brilliance": /^hypesquad brilliance$/i,
+    "hypesquad-balance": /^hypesquad balance$/i,
+    "bug-hunter-tier-1": /bug hunter/i,
+    "bug-hunter-tier-2": /bug hunter/i,
+    "early-supporter": /^early supporter$/i,
+    "partnered-server-owner": /^partnered server owner$/i,
+    "early-verified-bot-developer": /^early verified bot developer$/i,
+    "active-developer": /^active developer$/i,
+    "booster-badge": /^server boosting since\b/i,
+    "legacy-username": /^originally known as\b/i,
+    "completed-a-quest": /^completed a quest$/i,
+    "last-meadow-online": /^level .+ reached$/i,
+    "orbs-apprentice": /orb profile badge/i,
+    "discord-lootbox-clown": /clown/i,
+};
+
+function hiddenBadgeMatchers(): { urls: Set<string>; patterns: RegExp[] } {
     const urls = new Set<string>();
+    const patterns: RegExp[] = [];
     for (const h of loadHiddenOfficialBadges()) {
         if (h === "booster-badge") {
             BOOST_FAMILY_IMAGES.forEach(u => urls.add(u));
-            continue;
+        } else {
+            const entry = BADGE_CATALOG.find(b => b.id === h);
+            if (!entry) {
+                if (/^[0-9a-f]{16,}$/i.test(h)) urls.add(`${BADGE_ICONS}/${h}.png`);
+                continue;
+            }
+            if (NITRO_TIER_IDS.has(entry.id)) NITRO_FAMILY_IMAGES.forEach(u => urls.add(u));
+            else if (entry.tierGroup === "server-boost") BOOST_FAMILY_IMAGES.forEach(u => urls.add(u));
+            else if (entry.tierGroup === "gifting") GIFTING_FAMILY_IMAGES.forEach(u => urls.add(u));
+            else urls.add(entry.image);
         }
-        const entry = BADGE_CATALOG.find(b => b.id === h);
-        if (!entry) {
-            if (/^[0-9a-f]{16,}$/i.test(h)) urls.add(`${BADGE_ICONS}/${h}.png`);
-            continue;
+
+        if (h === "gifting" || BADGE_CATALOG.find(b => b.id === h)?.tierGroup === "gifting") {
+            patterns.push(/^gifting /i);
+        } else if (NITRO_TIER_IDS.has(h)) {
+            patterns.push(NITRO_LABEL_PATTERN);
+        } else if (HIDDEN_LABEL_PATTERNS[h]) {
+            patterns.push(HIDDEN_LABEL_PATTERNS[h]);
         }
-        if (NITRO_TIER_IDS.has(entry.id)) NITRO_FAMILY_IMAGES.forEach(u => urls.add(u));
-        else if (entry.tierGroup === "server-boost") BOOST_FAMILY_IMAGES.forEach(u => urls.add(u));
-        else if (entry.tierGroup === "gifting") GIFTING_FAMILY_IMAGES.forEach(u => urls.add(u));
-        else urls.add(entry.image);
     }
-    return urls;
+    return { urls, patterns };
+}
+
+function isOwnProfileContext(el: HTMLElement): boolean {
+    const myId = getRealSelf()?.id;
+    if (!myId) return false;
+    let cur: HTMLElement | null = el.parentElement;
+    for (let i = 0; i < 25 && cur; i++) {
+        const avatars = cur.querySelectorAll?.('img[src*="/avatars/"]');
+        if (avatars?.length) {
+            return [...avatars].some(a => {
+                const src = (a as HTMLImageElement).src;
+                return src.includes(`/avatars/${myId}/`) || src.includes(`/users/${myId}/avatars/`);
+            });
+        }
+        cur = cur.parentElement;
+    }
+    return false;
 }
 
 function tryRemoveHiddenBadgeElements() {
-    const urls = hiddenBadgeImageUrls();
-    if (!urls.size) return;
-    document.querySelectorAll('img[src^="https://cdn.discordapp.com/badge-icons/"]').forEach(node => {
-        const img = node as HTMLImageElement;
-        if (!urls.has(img.src)) return;
-        if (img.style.pointerEvents === "none") return;
-        (img.closest("a") ?? img).remove();
+    const hidden = loadHiddenOfficialBadges();
+    if (!hidden.length) return;
+    const nukeAll = hidden.includes("all-badges");
+    const { urls, patterns } = hiddenBadgeMatchers();
+    if (!nukeAll && !urls.size && !patterns.length) return;
+
+    document.querySelectorAll('[role="group"][aria-label="User Badges"]').forEach(group => {
+        if (!isOwnProfileContext(group as HTMLElement)) return;
+
+        if (nukeAll) {
+            group.querySelectorAll("img, svg").forEach(node => {
+                const el = node as HTMLElement;
+                if (el instanceof HTMLImageElement && el.style.pointerEvents === "none") return;
+                const holder = (el.closest("a") ?? (el.parentElement !== group ? el.parentElement : null) ?? el) as HTMLElement;
+                if (holder === group) return;
+                if (holder.querySelector('img[style*="pointer-events: none"]')) return;
+                holder.remove();
+            });
+            return;
+        }
+
+        group.querySelectorAll('img[src^="https://cdn.discordapp.com/badge-icons/"], img[src^="https://discord.com/assets/"]').forEach(node => {
+            const img = node as HTMLImageElement;
+            if (img.style.pointerEvents === "none") return;
+            const holder = (img.closest("a") ?? img) as HTMLElement;
+            const label = holder.getAttribute("aria-label") ?? "";
+            if (urls.has(img.src) || patterns.some(p => p.test(label))) holder.remove();
+        });
     });
 }
 
@@ -636,6 +713,26 @@ function stopHiddenBadgeWatch() {
 function updateHiddenBadgeWatchState() {
     if (loadHiddenOfficialBadges().length > 0) startHiddenBadgeWatch();
     else stopHiddenBadgeWatch();
+}
+
+function removeAllBadgesNow(): number {
+    const count = loadBadges().length;
+    const officialIds = ["all-badges", ...new Set(BADGE_CATALOG.map(b =>
+        b.tierGroup === "server-boost" ? "booster-badge"
+            : b.tierGroup === "nitro-sub" ? "discord-nitro"
+                : b.tierGroup === "gifting" ? "gifting-legend"
+                    : b.id))];
+    saveBadges([]);
+    saveHiddenOfficialBadges([...new Set([...loadHiddenOfficialBadges(), ...officialIds])]);
+    refreshRegisteredBadges();
+    updateHiddenBadgeWatchState();
+    try {
+        tryRemoveHiddenBadgeElements();
+    } catch (e) {
+        console.error("[Larp] Immediate badge sweep failed", e);
+    }
+    FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCEED" });
+    return count;
 }
 
 let accountSwitcherObserver: MutationObserver | null = null;
@@ -850,7 +947,149 @@ function updateTextOverrideWatchState() {
     else stopTextOverrideWatch();
 }
 
+function exportBadgeConfig(): string {
+    return JSON.stringify({
+        version: 2,
+        plugin: "Larp",
+        badges: loadBadges().map(b => b.id),
+        hiddenOfficialBadges: loadHiddenOfficialBadges(),
+        settings: {
+            enableUsernameOverride: !!settings.store.enableUsernameOverride,
+            customUsername: settings.store.customUsername ?? "",
+            flipBadgeOrder: !!settings.store.flipBadgeOrder,
+            fakeBadgeEarnedDate: settings.store.fakeBadgeEarnedDate ?? "",
+            enableFakeAccount: !!settings.store.enableFakeAccount,
+            fakeAccountName: settings.store.fakeAccountName ?? "",
+            fakeAccountTag: settings.store.fakeAccountTag ?? "",
+            fakeAccountAvatarUrl: settings.store.fakeAccountAvatarUrl ?? "",
+            textOverrides: loadTextOverrides()
+        }
+    }, null, 2);
+}
+
+const IMPORTABLE_BOOLEAN_SETTINGS = ["enableUsernameOverride", "flipBadgeOrder", "enableFakeAccount"] as const;
+const IMPORTABLE_STRING_SETTINGS = ["customUsername", "fakeBadgeEarnedDate", "fakeAccountName", "fakeAccountTag", "fakeAccountAvatarUrl"] as const;
+
+function importBadgeConfig(raw: string): { ok: boolean; message: string } {
+    let parsed: any;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return { ok: false, message: "Import failed: not valid JSON. Nothing was changed." };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { ok: false, message: "Import failed: expected a JSON object. Nothing was changed." };
+    }
+    if (!Array.isArray(parsed.badges)) {
+        return { ok: false, message: 'Import failed: missing a "badges" array. Nothing was changed.' };
+    }
+
+    const resolved: StoredBadge[] = [];
+    const skipped: string[] = [];
+    const seen = new Set<string>();
+    for (const item of parsed.badges) {
+        const id = typeof item === "string" ? item
+            : (item && typeof item === "object" && typeof item.id === "string" ? item.id : null);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const entry = BADGE_CATALOG.find(b => b.id === id);
+        if (entry) resolved.push(entry);
+        else skipped.push(id);
+    }
+
+    const importedHidden = Array.isArray(parsed.hiddenOfficialBadges)
+        ? [...new Set(parsed.hiddenOfficialBadges.filter((h: any) => typeof h === "string" && h.length > 0 && h.length <= 100))] as string[]
+        : null;
+
+    removeAllBadgesNow();
+
+    saveBadges(resolved);
+    if (importedHidden?.length) saveHiddenOfficialBadges([...new Set([...loadHiddenOfficialBadges(), ...importedHidden])]);
+    const hidden = loadHiddenOfficialBadges();
+
+    let settingsApplied = 0;
+    if (parsed.settings && typeof parsed.settings === "object" && !Array.isArray(parsed.settings)) {
+        const s = parsed.settings;
+        for (const key of IMPORTABLE_BOOLEAN_SETTINGS) {
+            if (typeof s[key] === "boolean") {
+                (settings.store as any)[key] = s[key];
+                settingsApplied++;
+            }
+        }
+        for (const key of IMPORTABLE_STRING_SETTINGS) {
+            if (typeof s[key] === "string" && s[key].length <= 500) {
+                (settings.store as any)[key] = s[key];
+                settingsApplied++;
+            }
+        }
+        if (Array.isArray(s.textOverrides)) {
+            const overrides = s.textOverrides
+                .filter((o: any) => o && typeof o === "object" && typeof o.find === "string" && o.find.length > 0 && typeof o.replace === "string")
+                .map((o: any) => ({ find: o.find, replace: o.replace }));
+            saveTextOverrides(overrides);
+            settingsApplied++;
+        }
+    }
+
+    refreshRegisteredBadges();
+    updateHiddenBadgeWatchState();
+    patchOrUnpatchSelfOverrides();
+    updateAccountSwitcherWatchState();
+    updateTextOverrideWatchState();
+    FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCEED" });
+
+    const skippedNote = skipped.length ? ` Skipped ${skipped.length} unknown id(s): ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", ..." : ""}.` : "";
+    const settingsNote = settingsApplied ? ` Applied ${settingsApplied} setting(s).` : "";
+    return { ok: true, message: `Cleared old badges, then imported ${resolved.length} badge(s) and ${hidden.length} hidden official badge(s).${settingsNote}${skippedNote}` };
+}
+
+function ImportExportSection() {
+    const [text, setText] = React.useState("");
+    const [status, setStatus] = React.useState("");
+
+    const boxStyle: React.CSSProperties = {
+        width: "100%", minHeight: 120, resize: "vertical", boxSizing: "border-box",
+        background: "var(--input-background, rgba(0,0,0,0.3))",
+        color: "var(--text-normal, #dbdee1)",
+        border: "1px solid var(--background-modifier-accent, rgba(255,255,255,0.1))",
+        borderRadius: 4, padding: 8, fontFamily: "var(--font-code, monospace)", fontSize: 12
+    };
+    const buttonStyle: React.CSSProperties = {
+        background: "var(--brand-500, #5865f2)", color: "#fff", border: "none",
+        borderRadius: 4, padding: "8px 14px", cursor: "pointer", marginRight: 8
+    };
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Text variant="heading-md/semibold">Badge Configuration Export / Import</Text>
+            <Text variant="text-sm/normal" style={{ opacity: 0.7 }}>
+                Export writes your full Larp configuration (added badges in order, hidden official badges, username override, fake badge earned date, fake account settings, and text overrides) into the box as JSON. Import validates the JSON, removes all your current badges first, then applies the imported badges and settings - only your own profile is affected, and the UI updates immediately.
+            </Text>
+            <textarea
+                style={boxStyle}
+                value={text}
+                placeholder='{"version": 1, "badges": ["discord-staff", ...], "hiddenOfficialBadges": [...]}'
+                onChange={e => setText((e.target as HTMLTextAreaElement).value)}
+            />
+            <div>
+                <button style={buttonStyle} onClick={() => { setText(exportBadgeConfig()); setStatus("Exported current configuration to the box. Copy it somewhere safe."); }}>
+                    Export
+                </button>
+                <button style={buttonStyle} onClick={() => { const r = importBadgeConfig(text); setStatus(r.message); }}>
+                    Import
+                </button>
+            </div>
+            {status && <Text variant="text-sm/normal" style={{ opacity: 0.85 }}>{status}</Text>}
+        </div>
+    );
+}
+
 const settings = definePluginSettings({
+    importExport: {
+        type: OptionType.COMPONENT,
+        description: "Export or import your badge configuration",
+        component: ImportExportSection
+    },
     enableUsernameOverride: {
         type: OptionType.BOOLEAN,
         description: "Locally override your @username (does not touch your display name)",
@@ -944,10 +1183,11 @@ export default definePlugin({
                     options: [{ name: "badge", description: "Badge id (see /larp official), or a raw id from /larp real", type: ApplicationCommandOptionType.STRING, required: true }]
                 },
                 {
-                    name: "unhide", description: "Show a previously hidden official badge again", type: ApplicationCommandOptionType.SUB_COMMAND,
-                    options: [{ name: "badge", description: "Badge id (see /larp official)", type: ApplicationCommandOptionType.STRING, required: true }]
+                    name: "unhide", description: "Show a previously hidden official badge again (or \"all\")", type: ApplicationCommandOptionType.SUB_COMMAND,
+                    options: [{ name: "badge", description: "Badge id (see /larp official), or \"all\"", type: ApplicationCommandOptionType.STRING, required: true }]
                 },
                 { name: "official", description: "List the official badges on your account (hide/unhide targets)", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
+                { name: "export", description: "Export your badge configuration as JSON (import it in Settings → Plugins → Larp)", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
                 { name: "milestones", description: "Open the Nitro/Boost milestone ladder for your tenure badge", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] },
                 {
                     name: "real", description: "Print the exact badge art URLs Discord serves on a live profile", type: ApplicationCommandOptionType.SUB_COMMAND,
@@ -981,6 +1221,7 @@ export default definePlugin({
                             "`/larp list` — what you've added",
                             "`/larp hide <id>` / `/larp unhide <id>` — hide/show official badges",
                             "`/larp official` — which official badges your account actually has",
+                            "`/larp export` — dump your badge config as JSON (import lives in Settings → Plugins → Larp)",
                             "`/larp milestones` — Nitro/Boost milestone ladder",
                             "`/larp real [user-id]` — exact badge art URLs from a live profile",
                             "`/larp text <find> <replace>` / `/larp untext <find>` / `/larp texts` — UI text overrides",
@@ -1033,9 +1274,8 @@ export default definePlugin({
                         const badges = loadBadges();
 
                         if (query.toLowerCase() === "all") {
-                            saveBadges([]);
-                            refreshRegisteredBadges();
-                            say(`Cleared ${badges.length} badge${badges.length === 1 ? "" : "s"}.`);
+                            const cleared = removeAllBadgesNow();
+                            say(`Cleared ${cleared} added badge${cleared === 1 ? "" : "s"} and hid every official badge (boost, quest, Last Meadow, orbs, gifting, etc.). Use \`/larp unhide all\` to show your real badges again.`);
                             break;
                         }
 
@@ -1074,7 +1314,7 @@ export default definePlugin({
                         }
 
                         hideOfficialBadge(hideId);
-                        const rawNote = officialMatch ? "" : " (treated as a raw Discord badge id - use `/larp real` to see the exact ids on your profile)";
+                        const rawNote = officialMatch || isBoostQuery ? "" : " (treated as a raw Discord badge id - use `/larp real` to see the exact ids on your profile)";
                         const nitroNote = NITRO_TIER_IDS.has(hideId)
                             ? " Heads up: Discord doesn't let a client hide just the tenure decoration, so this also hides your plain Discord Nitro badge - they're not separable."
                             : "";
@@ -1112,6 +1352,14 @@ export default definePlugin({
 
                     case "unhide": {
                         const id = opt("badge");
+                        if (id.toLowerCase() === "all") {
+                            const count = loadHiddenOfficialBadges().length;
+                            saveHiddenOfficialBadges([]);
+                            updateHiddenBadgeWatchState();
+                            FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCEED" });
+                            say(`Unhid ${count} badge${count === 1 ? "" : "s"} - your real badges will show again.`);
+                            break;
+                        }
                         const hidden = loadHiddenOfficialBadges();
                         if (!hidden.includes(id)) {
                             say(`Badge "${id}" wasn't hidden.`);
@@ -1147,6 +1395,11 @@ export default definePlugin({
                             : "";
 
                         say(`Official badges you currently have (👻 = hidden, ✅ = showing):\n${ownedText}${unverifiableText}`);
+                        break;
+                    }
+
+                    case "export": {
+                        say(`Your badge configuration - paste this into Settings → Plugins → Larp → Import to restore it:\n\`\`\`json\n${exportBadgeConfig()}\n\`\`\``);
                         break;
                     }
 
