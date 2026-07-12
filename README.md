@@ -11,6 +11,7 @@
 ## Made by
 - **@vibcode** (Discord: 1497451226806353980)
 - **@ragebotted** (Discord: 893913378093944873)
+- **@baviolie** (Discord: 1381714138476318821)
 
 ---
 
@@ -58,7 +59,7 @@ This is a client-side modification. Use at your own risk. Only affects what **yo
 
 ---
 
-made by Ooo & kt
+made by Ooo & kt & bav
 
 ## Installation (Equicord)
 ### Recommended: As Userplugin
