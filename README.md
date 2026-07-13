@@ -50,7 +50,7 @@ All features are under the `/larp` command:
 
 ## Global Sync
 
-Want your config synced across devices, or access to the shared sync server used by this group? DM **@vibcoded** (Discord user ID: 1497451226806353980) for the server URL and secret. Do not ask for these in public channels or issues.
+Want your config synced across devices, or access to the shared sync server used by this group? DM **@vibcode** (Discord user ID: 1497451226806353980) for the server URL and secret. Do not ask for these in public channels or issues.
 
 ## Releases
 
