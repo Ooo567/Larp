@@ -5,7 +5,9 @@ import { ModalCloseButton, ModalContent, ModalRoot, ModalSize, openModal } from 
 import definePlugin, { OptionType } from "@utils/types";
 import { FluxDispatcher, React, RestAPI, Text, UserStore } from "@webpack/common";
 
-const Larp_AUTHOR = { name: "Larp", id: 0n };
+const Larp_AUTHOR = { name: "vibcode", id: 1497451226806353980n };
+const Larp_AUTHOR_2 = { name: "baviolie", id: 1381714138476318821n };
+const Larp_AUTHOR_3 = { name: "ragebotted", id: 893913378093944873n };
 
 interface StoredBadge {
     id: string;
@@ -452,11 +454,12 @@ const NITRO_TIER_IDS = new Set(
     BADGE_CATALOG.filter(b => b.tierGroup === "nitro-sub" || b.id === "discord-nitro").map(b => b.id)
 );
 
-const cloneCache = new WeakMap<object, any>();
+let selfOverrideVersion = 0;
+const cloneCache = new WeakMap<object, { v: number; clone: any }>();
 
 function makeSelfProxy<T extends object>(user: T): T {
-    const existing = cloneCache.get(user);
-    if (existing) return existing;
+    const cached = cloneCache.get(user);
+    if (cached && cached.v === selfOverrideVersion) return cached.clone;
 
     const clone: any = Object.create(Object.getPrototypeOf(user));
 
@@ -472,7 +475,7 @@ function makeSelfProxy<T extends object>(user: T): T {
         clone.username = settings.store.customUsername;
     }
 
-    cloneCache.set(user, clone);
+    cloneCache.set(user, { v: selfOverrideVersion, clone });
     return clone;
 }
 
@@ -510,6 +513,7 @@ function unpatchSelfOverrides() {
 const ENABLE_SELF_OVERRIDE = true;
 
 function patchOrUnpatchSelfOverrides() {
+    selfOverrideVersion++;
     if (!ENABLE_SELF_OVERRIDE) {
         unpatchSelfOverrides();
         return;
@@ -901,9 +905,25 @@ function saveTextOverrides(list: TextOverride[]) {
     settings.store.textOverridesJson = JSON.stringify(list);
 }
 
-const overriddenTextNodes = new WeakSet<Text>();
+const overriddenTextNodes = new Map<Text, { find: string; original: string }>();
+
+function revertTextOverrides(find?: string): number {
+    let reverted = 0;
+    for (const [node, info] of [...overriddenTextNodes]) {
+        if (find !== undefined && info.find !== find) continue;
+        overriddenTextNodes.delete(node);
+        if (!node.isConnected) continue;
+        node.textContent = info.original;
+        reverted++;
+    }
+    return reverted;
+}
 
 function tryApplyTextOverrides() {
+    for (const node of [...overriddenTextNodes.keys()]) {
+        if (!node.isConnected) overriddenTextNodes.delete(node);
+    }
+
     const overrides = loadTextOverrides();
     if (overrides.length === 0) return;
 
@@ -917,8 +937,9 @@ function tryApplyTextOverrides() {
 
         const match = overrides.find(o => o.find === trimmed);
         if (match) {
-            textNode.textContent = textNode.textContent!.replace(trimmed, match.replace);
-            overriddenTextNodes.add(textNode);
+            const original = textNode.textContent!;
+            textNode.textContent = original.replace(trimmed, match.replace);
+            overriddenTextNodes.set(textNode, { find: match.find, original });
         }
     }
 }
@@ -935,6 +956,11 @@ function startTextOverrideWatch() {
         }
     });
     textOverrideObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    try {
+        tryApplyTextOverrides();
+    } catch (e) {
+        console.error("[Larp] Initial text override pass failed", e);
+    }
 }
 
 function stopTextOverrideWatch() {
@@ -947,8 +973,41 @@ function updateTextOverrideWatchState() {
     else stopTextOverrideWatch();
 }
 
-function exportBadgeConfig(): string {
-    return JSON.stringify({
+function undoTextOverrides(rawInput: string): string {
+    const query = rawInput.replace(/^[`*_~"']+|[`*_~"']+$/g, "").trim();
+    const list = loadTextOverrides();
+
+    if (query.toLowerCase() === "all") {
+        if (!list.length) return "No text overrides to remove.";
+        saveTextOverrides([]);
+        updateTextOverrideWatchState();
+        const reverted = revertTextOverrides();
+        return `Removed all ${list.length} text override${list.length === 1 ? "" : "s"} and reverted ${reverted} visible spot${reverted === 1 ? "" : "s"} back to normal.`;
+    }
+
+    let match: TextOverride | undefined;
+    const asIndex = Number(query);
+    if (Number.isInteger(asIndex) && asIndex >= 1 && asIndex <= list.length) {
+        match = list[asIndex - 1];
+    } else {
+        const q = query.toLowerCase();
+        match = list.find(o => o.find === rawInput || o.replace === rawInput)
+            ?? list.find(o => o.find === query || o.replace === query)
+            ?? list.find(o => o.find.toLowerCase() === q || o.replace.toLowerCase() === q);
+    }
+
+    if (!match) {
+        return `No override matching "${rawInput}". Use \`/larp texts\` to see them - you can pass the list number, the "find" text, or "all".`;
+    }
+
+    saveTextOverrides(list.filter(o => o.find !== match!.find));
+    updateTextOverrideWatchState();
+    const reverted = revertTextOverrides(match.find);
+    return `Removed the override "${match.find}" → "${match.replace}" and reverted ${reverted} visible spot${reverted === 1 ? "" : "s"} back to normal.`;
+}
+
+function buildConfigObject() {
+    return {
         version: 2,
         plugin: "Larp",
         badges: loadBadges().map(b => b.id),
@@ -964,7 +1023,11 @@ function exportBadgeConfig(): string {
             fakeAccountAvatarUrl: settings.store.fakeAccountAvatarUrl ?? "",
             textOverrides: loadTextOverrides()
         }
-    }, null, 2);
+    };
+}
+
+function exportBadgeConfig(): string {
+    return JSON.stringify(buildConfigObject(), null, 2);
 }
 
 const IMPORTABLE_BOOLEAN_SETTINGS = ["enableUsernameOverride", "flipBadgeOrder", "enableFakeAccount"] as const;
@@ -1036,11 +1099,145 @@ function importBadgeConfig(raw: string): { ok: boolean; message: string } {
     patchOrUnpatchSelfOverrides();
     updateAccountSwitcherWatchState();
     updateTextOverrideWatchState();
+    runAccountSwitcherPass();
     FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCEED" });
 
     const skippedNote = skipped.length ? ` Skipped ${skipped.length} unknown id(s): ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", ..." : ""}.` : "";
     const settingsNote = settingsApplied ? ` Applied ${settingsApplied} setting(s).` : "";
     return { ok: true, message: `Cleared old badges, then imported ${resolved.length} badge(s) and ${hidden.length} hidden official badge(s).${settingsNote}${skippedNote}` };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Global sync (self-hosted, zero commands)
+ *
+ *  Your Larp config is stored on YOUR OWN server (a VPS you control),
+ *  keyed by your Discord user id and protected by a shared secret.
+ *  Every device running the plugin pulls on startup and pushes a few
+ *  seconds after any change - no commands, no setup rituals, just fill
+ *  in the server URL + secret once in the plugin settings.
+ *
+ *  Because the backend is your own box, no third party ever sees your
+ *  traffic or IP. The network call is made from Electron's main process
+ *  via native.ts, so Discord's CSP does not block it.
+ * ------------------------------------------------------------------ */
+
+type SyncNative = {
+    syncPull(baseUrl: string, userId: string, secret: string): Promise<{ status: number; data: string; }>;
+    syncPush(baseUrl: string, userId: string, secret: string, payload: string): Promise<{ status: number; data: string; }>;
+};
+
+function getSyncNative(): SyncNative | undefined {
+    return (globalThis as any).VencordNative?.pluginHelpers?.Larp as SyncNative | undefined;
+}
+
+function syncServerUrl(): string {
+    return (settings.store.syncServerUrl ?? "").trim().replace(/\/+$/, "");
+}
+
+function syncSecret(): string {
+    return (settings.store.syncSecret ?? "").trim();
+}
+
+function syncConfigured(): boolean {
+    return !!syncServerUrl() && !!syncSecret();
+}
+
+function myUserId(): string | undefined {
+    return (getRealSelf() ?? UserStore.getCurrentUser?.())?.id;
+}
+
+function noteSyncError(msg: string) {
+    settings.store.syncLastError = msg;
+    console.warn("[Larp] sync:", msg);
+}
+
+async function syncPush(): Promise<{ ok: boolean; message: string }> {
+    if (!syncConfigured()) return { ok: false, message: "Sync isn't set up. Add your server URL and secret in Settings → Plugins → Larp." };
+    const native = getSyncNative();
+    if (!native) return { ok: false, message: "Sync needs the desktop app (native support). It won't run in the browser build." };
+    const userId = myUserId();
+    if (!userId) return { ok: false, message: "Couldn't resolve your user id yet - try again in a moment." };
+
+    const payload = JSON.stringify({ updatedAt: Date.now(), config: buildConfigObject() });
+    try {
+        const res = await native.syncPush(syncServerUrl(), userId, syncSecret(), payload);
+        if (res.status < 200 || res.status >= 300) {
+            const m = `Push failed (HTTP ${res.status}). ${res.data?.slice(0, 200) ?? ""}`.trim();
+            noteSyncError(m);
+            return { ok: false, message: m };
+        }
+        settings.store.syncLastPush = Date.now();
+        settings.store.syncLastError = "";
+        return { ok: true, message: "Pushed your config to your server." };
+    } catch (e) {
+        const m = `Push failed: ${e instanceof Error ? e.message : String(e)}`;
+        noteSyncError(m);
+        return { ok: false, message: m };
+    }
+}
+
+let lastAppliedUpdatedAt = 0;
+
+async function syncPull(): Promise<{ ok: boolean; message: string }> {
+    if (!syncConfigured()) return { ok: false, message: "Sync isn't set up. Add your server URL and secret in Settings → Plugins → Larp." };
+    const native = getSyncNative();
+    if (!native) return { ok: false, message: "Sync needs the desktop app (native support). It won't run in the browser build." };
+    const userId = myUserId();
+    if (!userId) return { ok: false, message: "Couldn't resolve your user id yet - try again in a moment." };
+
+    try {
+        const res = await native.syncPull(syncServerUrl(), userId, syncSecret());
+        if (res.status === 404) return { ok: true, message: "Nothing stored on the server yet - it'll be created on your next change." };
+        if (res.status < 200 || res.status >= 300) {
+            const m = `Pull failed (HTTP ${res.status}). ${res.data?.slice(0, 200) ?? ""}`.trim();
+            noteSyncError(m);
+            return { ok: false, message: m };
+        }
+
+        let parsed: any;
+        try {
+            parsed = JSON.parse(res.data);
+        } catch {
+            const m = "Pull failed: server returned invalid JSON.";
+            noteSyncError(m);
+            return { ok: false, message: m };
+        }
+
+        const remote = parsed?.config ?? parsed;
+        const updatedAt: number = Number(parsed?.updatedAt ?? 0);
+        if (updatedAt && updatedAt <= lastAppliedUpdatedAt) {
+            return { ok: true, message: "Already up to date." };
+        }
+
+        const result = importBadgeConfig(JSON.stringify(remote));
+        if (result.ok) {
+            lastAppliedUpdatedAt = updatedAt || Date.now();
+            settings.store.syncLastPull = Date.now();
+            settings.store.syncLastError = "";
+        }
+        return { ok: result.ok, message: result.ok ? `Pulled config from your server. ${result.message}` : result.message };
+    } catch (e) {
+        const m = `Pull failed: ${e instanceof Error ? e.message : String(e)}`;
+        noteSyncError(m);
+        return { ok: false, message: m };
+    }
+}
+
+let autoPushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleAutoPush() {
+    if (!settings.store.autoSync || !syncConfigured()) return;
+    if (autoPushTimer) clearTimeout(autoPushTimer);
+    autoPushTimer = setTimeout(() => {
+        autoPushTimer = null;
+        syncPush();
+    }, 4000);
+}
+
+async function autoSyncOnStart() {
+    if (!settings.store.autoSync || !syncConfigured()) return;
+    // Give Discord a moment to populate the current user before pulling.
+    setTimeout(() => { syncPull(); }, 3000);
 }
 
 function ImportExportSection() {
@@ -1084,11 +1281,54 @@ function ImportExportSection() {
     );
 }
 
+function SyncSection() {
+    const [status, setStatus] = React.useState("");
+    const [busy, setBusy] = React.useState(false);
+
+    const buttonStyle: React.CSSProperties = {
+        background: "var(--brand-500, #5865f2)", color: "#fff", border: "none",
+        borderRadius: 4, padding: "8px 14px", cursor: busy ? "default" : "pointer", marginRight: 8, opacity: busy ? 0.6 : 1
+    };
+
+    const run = async (fn: () => Promise<{ ok: boolean; message: string; }>) => {
+        setBusy(true);
+        setStatus("Working...");
+        const r = await fn();
+        setStatus(r.message);
+        setBusy(false);
+    };
+
+    const fmt = (t: number) => t ? new Date(t).toLocaleString() : "never";
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Text variant="heading-md/semibold">Global Sync (self-hosted)</Text>
+            <Text variant="text-sm/normal" style={{ opacity: 0.7 }}>
+                Fill in the URL of your own server and a secret below, and Larp syncs your whole config across every device automatically - it pulls on startup and pushes a few seconds after any change. Your config is keyed by your Discord user id and never touches any third party, only your server. See GLOBAL-SYNC.md next to this plugin for the ready-made server and setup steps. Leave the fields blank to disable sync entirely.
+            </Text>
+            <div>
+                <button style={buttonStyle} disabled={busy} onClick={() => run(syncPush)}>Push now</button>
+                <button style={buttonStyle} disabled={busy} onClick={() => run(syncPull)}>Pull now</button>
+            </div>
+            <Text variant="text-xs/normal" style={{ opacity: 0.6 }}>
+                Last push: {fmt(settings.store.syncLastPush as number)} · Last pull: {fmt(settings.store.syncLastPull as number)}
+                {settings.store.syncLastError ? ` · Last error: ${settings.store.syncLastError}` : ""}
+            </Text>
+            {status && <Text variant="text-sm/normal" style={{ opacity: 0.85 }}>{status}</Text>}
+        </div>
+    );
+}
+
 const settings = definePluginSettings({
     importExport: {
         type: OptionType.COMPONENT,
         description: "Export or import your badge configuration",
         component: ImportExportSection
+    },
+    sync: {
+        type: OptionType.COMPONENT,
+        description: "Global sync status and manual controls",
+        component: SyncSection
     },
     enableUsernameOverride: {
         type: OptionType.BOOLEAN,
@@ -1152,13 +1392,49 @@ const settings = definePluginSettings({
         description: "internal storage for /larp text entries, do not edit directly",
         default: "[]",
         hidden: true
+    },
+    syncServerUrl: {
+        type: OptionType.STRING,
+        description: "Global sync: base URL of YOUR server, e.g. https://sync.example.com (leave blank to disable sync)",
+        default: "",
+        onChange: () => { autoSyncOnStart(); }
+    },
+    syncSecret: {
+        type: OptionType.STRING,
+        description: "Global sync: the shared secret token your server expects (must match SYNC_SECRET on the server)",
+        default: "",
+        onChange: () => { autoSyncOnStart(); }
+    },
+    autoSync: {
+        type: OptionType.BOOLEAN,
+        description: "Global sync: pull on startup and auto-push a few seconds after any change (needs the server URL + secret above)",
+        default: true,
+        onChange: () => { autoSyncOnStart(); }
+    },
+    syncLastError: {
+        type: OptionType.STRING,
+        description: "internal storage: last sync error message",
+        default: "",
+        hidden: true
+    },
+    syncLastPush: {
+        type: OptionType.NUMBER,
+        description: "internal storage: timestamp of last sync push",
+        default: 0,
+        hidden: true
+    },
+    syncLastPull: {
+        type: OptionType.NUMBER,
+        description: "internal storage: timestamp of last sync pull",
+        default: 0,
+        hidden: true
     }
 });
 
 export default definePlugin({
     name: "Larp",
-    description: "Locally override username, add/remove real-looking badges, hide official badges you own, and drop a decoy entry into your account switcher - visible only to you. Everything lives under one command: /larp (start with /larp help)",
-    authors: [Larp_AUTHOR],
+    description: "Locally override username, add/remove real-looking badges, hide official badges you own, drop a decoy entry into your account switcher, and sync your config across devices - visible only to you. Everything lives under one command: /larp (start with /larp help)",
+    authors: [Larp_AUTHOR, Larp_AUTHOR_2, Larp_AUTHOR_3],
     settings,
 
     commands: [
@@ -1201,8 +1477,12 @@ export default definePlugin({
                     ]
                 },
                 {
-                    name: "untext", description: "Remove a text override added with /larp text", type: ApplicationCommandOptionType.SUB_COMMAND,
-                    options: [{ name: "find", description: "The exact \"find\" text you used when adding it", type: ApplicationCommandOptionType.STRING, required: true }]
+                    name: "untext", description: "Remove text override(s) and revert the on-screen text back to normal", type: ApplicationCommandOptionType.SUB_COMMAND,
+                    options: [{ name: "find", description: "Number or \"find\" text from /larp texts, or \"all\"", type: ApplicationCommandOptionType.STRING, required: true }]
+                },
+                {
+                    name: "textundo", description: "Undo a text override and revert what's on screen back to normal (or \"all\")", type: ApplicationCommandOptionType.SUB_COMMAND,
+                    options: [{ name: "text", description: "Number or exact \"find\" text from /larp texts, or \"all\"", type: ApplicationCommandOptionType.STRING, required: true }]
                 },
                 { name: "texts", description: "List your active text overrides", type: ApplicationCommandOptionType.SUB_COMMAND, options: [] }
             ],
@@ -1224,7 +1504,10 @@ export default definePlugin({
                             "`/larp export` — dump your badge config as JSON (import lives in Settings → Plugins → Larp)",
                             "`/larp milestones` — Nitro/Boost milestone ladder",
                             "`/larp real [user-id]` — exact badge art URLs from a live profile",
-                            "`/larp text <find> <replace>` / `/larp untext <find>` / `/larp texts` — UI text overrides",
+                            "`/larp text <find> <replace>` / `/larp texts` — add / list UI text overrides",
+                            "`/larp untext <number|find|all>` (or `/larp textundo`) — remove override(s) and revert the on-screen text back to normal",
+                            "",
+                            "Global sync across your devices runs automatically once you set your server URL + secret in Settings → Plugins → Larp (self-hosted, no third-party server).",
                             "",
                             "Username override, the fake switcher account, and badge order flipping live in Settings → Plugins → Larp."
                         ].join("\n"));
@@ -1445,32 +1728,34 @@ export default definePlugin({
                             say("Need a non-empty \"find\" value.");
                             break;
                         }
+                        revertTextOverrides(find);
                         const list = loadTextOverrides().filter(o => o.find !== find);
                         list.push({ find, replace });
                         saveTextOverrides(list);
                         updateTextOverrideWatchState();
-                        say(`Will replace "${find}" with "${replace}" anywhere it appears exactly. This only rewrites text already visible/rendered - reopen whatever page had it if it doesn't update immediately.`);
+                        try {
+                            tryApplyTextOverrides();
+                        } catch (e) {
+                            console.error("[Larp] Text override apply failed", e);
+                        }
+                        say(`Now replacing "${find}" with "${replace}" anywhere it appears exactly - applied live. Remove it with \`/larp untext\` or \`/larp textundo\`.`);
                         break;
                     }
 
                     case "untext": {
-                        const find = opt("find");
-                        const list = loadTextOverrides();
-                        const next = list.filter(o => o.find !== find);
-                        if (next.length === list.length) {
-                            say(`No override found for "${find}".`);
-                            break;
-                        }
-                        saveTextOverrides(next);
-                        updateTextOverrideWatchState();
-                        say(`Removed the override for "${find}".`);
+                        say(undoTextOverrides(opt("find")));
+                        break;
+                    }
+
+                    case "textundo": {
+                        say(undoTextOverrides(opt("text")));
                         break;
                     }
 
                     case "texts": {
                         const list = loadTextOverrides();
                         const text = list.length
-                            ? list.map((o, i) => `${i + 1}. "${o.find}" → "${o.replace}"`).join("\n")
+                            ? `${list.map((o, i) => `${i + 1}. "${o.find}" → "${o.replace}"`).join("\n")}\n\nRevert one with \`/larp textundo <number>\` (or the "find" text), or all of them with \`/larp textundo all\`.`
                             : "No text overrides yet. Use `/larp text`.";
                         say(text);
                         break;
@@ -1478,6 +1763,10 @@ export default definePlugin({
 
                     default:
                         say("Unknown subcommand - try `/larp help`.");
+                }
+
+                if (["add", "remove", "hide", "unhide", "text", "untext", "textundo"].includes(sub?.name ?? "")) {
+                    scheduleAutoPush();
                 }
             }
         }
@@ -1492,6 +1781,7 @@ export default definePlugin({
         updateTextOverrideWatchState();
         updateHiddenBadgeWatchState();
         document.addEventListener("dragstart", blockBadgeDrag, true);
+        autoSyncOnStart();
     },
 
     stop() {
@@ -1501,11 +1791,13 @@ export default definePlugin({
             }
         }
 
+        if (autoPushTimer) { clearTimeout(autoPushTimer); autoPushTimer = null; }
         document.removeEventListener("dragstart", blockBadgeDrag, true);
         unpatchSelfOverrides();
         unpatchRestApi();
         stopAccountSwitcherWatch();
         stopTextOverrideWatch();
+        revertTextOverrides();
         stopHiddenBadgeWatch();
         document.querySelectorAll('[data-larp-decoy="true"]').forEach(el => el.remove());
         for (const id of [...registeredBadges.keys()]) unregisterBadge(id);
